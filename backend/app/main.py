@@ -31,6 +31,14 @@ from app.core.exceptions import (
     FFmpegError,
     DownloadError
 )
+from app.core.security import (
+    ip_rate_limiter,
+    log_security_event,
+    CSRFProtection,
+    should_redirect_to_https,
+    get_https_redirect_url,
+    DownloadCleaner
+)
 
 # Configure logging with rotation
 from logging.handlers import RotatingFileHandler
@@ -146,6 +154,72 @@ async def add_security_headers(request: Request, call_next):
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
 
+    return response
+
+
+# HTTPS Redirect Middleware (production only)
+@app.middleware("http")
+async def https_redirect(request: Request, call_next):
+    """Redirect HTTP to HTTPS in production"""
+    if should_redirect_to_https(request):
+        https_url = get_https_redirect_url(request)
+        return JSONResponse(
+            status_code=status.HTTP_301_MOVED_PERMANENTLY,
+            headers={"Location": https_url},
+            content={"detail": "Redirecting to HTTPS"}
+        )
+    return await call_next(request)
+
+
+# IP-Based Rate Limiting Middleware
+@app.middleware("http")
+async def ip_rate_limit(request: Request, call_next):
+    """Apply IP-based rate limiting"""
+    client_ip = request.client.host if request.client else "unknown"
+
+    is_allowed, reason = ip_rate_limiter.is_allowed(client_ip)
+
+    if not is_allowed:
+        log_security_event("rate_limit_exceeded", {
+            "reason": reason,
+            "ip": client_ip
+        }, request)
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content={
+                "error": "RateLimitExceeded",
+                "detail": reason
+            },
+            headers={
+                "Retry-After": "60",
+                "X-RateLimit-Limit": str(settings.RATE_LIMIT_PER_MINUTE),
+                "X-RateLimit-Remaining": "0"
+            }
+        )
+
+    # Add rate limit headers to response
+    response = await call_next(request)
+    stats = ip_rate_limiter.get_stats(client_ip)
+    response.headers["X-RateLimit-Limit"] = str(stats["minute_limit"])
+    response.headers["X-RateLimit-Remaining"] = str(
+        max(0, stats["minute_limit"] - stats["requests_last_minute"]))
+
+    return response
+
+
+# CSRF Token Endpoint
+@app.get("/api/csrf-token")
+async def get_csrf_token():
+    """Get a CSRF token for state-changing requests"""
+    token = CSRFProtection.generate_token()
+    response = JSONResponse(content={"csrf_token": token})
+    response.set_cookie(
+        key=CSRFProtection.CSRF_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        samesite="strict",
+        secure=not settings.DEBUG
+    )
     return response
 
 
@@ -306,6 +380,33 @@ async def health_check():
         "ffmpeg_available": os.path.exists(settings.FFMPEG_PATH),
         "database_ok": True  # TODO: Add actual DB health check
     }
+
+
+@app.get("/api/admin/download-stats")
+async def get_download_stats():
+    """Get download storage statistics (admin endpoint)"""
+    stats = DownloadCleaner.get_download_stats()
+    stats["total_size_human"] = f"{stats['total_size_bytes'] / (1024**3):.2f} GB"
+    return stats
+
+
+@app.post("/api/admin/cleanup-downloads")
+async def cleanup_downloads(expiry_days: int = 7):
+    """
+    Manually trigger download cleanup (admin endpoint)
+
+    Args:
+        expiry_days: Delete files older than this many days
+    """
+    if expiry_days < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="expiry_days must be at least 1"
+        )
+
+    stats = DownloadCleaner.cleanup_old_downloads(expiry_days)
+    stats["bytes_freed_human"] = f"{stats['bytes_freed'] / (1024**2):.2f} MB"
+    return stats
 
 
 # ============================================================================

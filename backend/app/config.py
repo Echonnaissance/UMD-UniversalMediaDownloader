@@ -92,6 +92,19 @@ class Settings(BaseSettings):
     ENABLE_API_KEY_AUTH: bool = False
     API_KEY: str = ""  # Set via environment variable
 
+    # CSRF Protection
+    # Enable in production for state-changing endpoints
+    ENABLE_CSRF_PROTECTION: bool = False
+
+    # HTTPS Redirect
+    # Enable in production behind reverse proxy
+    FORCE_HTTPS: bool = False
+
+    # Download Expiration
+    # Automatically clean up downloads older than this (days)
+    DOWNLOAD_EXPIRY_DAYS: int = 7
+    ENABLE_AUTO_CLEANUP: bool = False  # Enable scheduled cleanup
+
     # Rate Limiting
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_PER_MINUTE: int = 60  # Requests per minute

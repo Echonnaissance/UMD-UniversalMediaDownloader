@@ -2,19 +2,33 @@
 Security Module
 Handles authentication, authorization, and security utilities
 """
-from fastapi import Security, HTTPException, status, Request
+from fastapi import Security, HTTPException, status, Request, Response
 from fastapi.security import APIKeyHeader
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
+from datetime import datetime, timedelta
+from collections import defaultdict
 import secrets
 import hashlib
 import hmac
 import logging
+import json
+import time
+import threading
 
 from app.config import settings
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+# Security audit logger - separate file for security events
+security_logger = logging.getLogger("security")
+security_handler = logging.FileHandler("security_audit.log")
+security_handler.setFormatter(logging.Formatter(
+    "%(asctime)s - %(levelname)s - %(message)s"
+))
+security_logger.addHandler(security_handler)
+security_logger.setLevel(logging.INFO)
 
 # ============================================================================
 # API Key Authentication
@@ -228,13 +242,15 @@ def sanitize_url(url: str) -> str:
     normalized_url = unicodedata.normalize('NFKC', decoded_url)
 
     # Characters that could be used for command injection
-    dangerous_chars = [";", "|", "&", "$", "`", "\\", "\n", "\r", "(", ")", "{", "}", "<", ">", "\x00"]
+    dangerous_chars = [";", "|", "&", "$", "`", "\\",
+                       "\n", "\r", "(", ")", "{", "}", "<", ">", "\x00"]
 
     # Check both original and decoded for dangerous characters
     for check_url in [url, decoded_url, normalized_url]:
         for char in dangerous_chars:
             if char in check_url:
-                logger.warning(f"Dangerous character '{repr(char)}' found in URL: {url}")
+                logger.warning(
+                    f"Dangerous character '{repr(char)}' found in URL: {url}")
                 raise ValueError(
                     f"URL contains forbidden character. "
                     "Possible command injection attempt."
@@ -277,7 +293,8 @@ def validate_request_size(content_length: Optional[int], max_size: int = 1024 * 
         HTTPException: If content length exceeds limit
     """
     if content_length and content_length > max_size:
-        logger.warning(f"Request too large: {content_length} bytes (max: {max_size})")
+        logger.warning(
+            f"Request too large: {content_length} bytes (max: {max_size})")
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"Request body too large. Maximum size: {max_size} bytes"
@@ -333,7 +350,8 @@ def check_disk_space(required_space: Optional[int] = None) -> bool:
                 f"Required: {required_space / (1024**3):.2f} GB"
             )
 
-        logger.info(f"Disk space check passed: {usage.free / (1024**3):.2f} GB available")
+        logger.info(
+            f"Disk space check passed: {usage.free / (1024**3):.2f} GB available")
         return True
 
     except Exception as e:
@@ -392,7 +410,8 @@ def check_user_quota(user_id: Optional[str] = None) -> bool:
                 f"Limit: {settings.MAX_USER_QUOTA / (1024**3):.2f} GB"
             )
 
-        logger.info(f"Quota check passed: {total_size / (1024**3):.2f} GB used")
+        logger.info(
+            f"Quota check passed: {total_size / (1024**3):.2f} GB used")
         return True
 
     except Exception as e:
@@ -460,7 +479,8 @@ def validate_file_type(file_path: Path) -> bool:
         ]
 
         if mime_type and mime_type not in allowed_mimes:
-            logger.warning(f"Suspicious file type detected: {mime_type} for {file_path}")
+            logger.warning(
+                f"Suspicious file type detected: {mime_type} for {file_path}")
             # In production, might want to delete suspicious files
             if not settings.DEBUG:
                 file_path.unlink()
@@ -490,10 +510,411 @@ def log_security_event(event_type: str, details: dict, request: Optional[Request
     log_data = {
         "event_type": event_type,
         "details": details,
+        "timestamp": datetime.utcnow().isoformat(),
     }
 
     if request:
         log_data["client_ip"] = request.client.host if request.client else "unknown"
         log_data["user_agent"] = request.headers.get("user-agent", "unknown")
+        log_data["path"] = str(request.url.path)
+        log_data["method"] = request.method
 
+    # Log to both regular and security audit logs
     logger.warning(f"SECURITY EVENT: {log_data}")
+    security_logger.warning(json.dumps(log_data))
+
+
+# ============================================================================
+# CSRF Protection
+# ============================================================================
+
+class CSRFProtection:
+    """
+    CSRF protection using double-submit cookie pattern
+
+    SECURITY: Prevents cross-site request forgery attacks
+    """
+
+    CSRF_COOKIE_NAME = "csrf_token"
+    CSRF_HEADER_NAME = "X-CSRF-Token"
+    TOKEN_LENGTH = 32
+    TOKEN_EXPIRY = timedelta(hours=24)
+
+    # Store tokens with expiry (in production, use Redis)
+    _tokens: Dict[str, datetime] = {}
+    _lock = threading.Lock()
+
+    @classmethod
+    def generate_token(cls) -> str:
+        """Generate a new CSRF token"""
+        token = secrets.token_urlsafe(cls.TOKEN_LENGTH)
+        with cls._lock:
+            cls._tokens[token] = datetime.utcnow() + cls.TOKEN_EXPIRY
+            # Clean up expired tokens
+            cls._cleanup_expired()
+        return token
+
+    @classmethod
+    def validate_token(cls, token: str) -> bool:
+        """Validate a CSRF token"""
+        if not token:
+            return False
+        with cls._lock:
+            expiry = cls._tokens.get(token)
+            if expiry and expiry > datetime.utcnow():
+                return True
+        return False
+
+    @classmethod
+    def _cleanup_expired(cls):
+        """Remove expired tokens"""
+        now = datetime.utcnow()
+        expired = [t for t, exp in cls._tokens.items() if exp <= now]
+        for t in expired:
+            del cls._tokens[t]
+
+    @classmethod
+    def get_token_from_request(cls, request: Request) -> Optional[str]:
+        """Extract CSRF token from request header or cookie"""
+        # Check header first
+        header_token = request.headers.get(cls.CSRF_HEADER_NAME)
+        if header_token:
+            return header_token
+        # Fall back to cookie
+        return request.cookies.get(cls.CSRF_COOKIE_NAME)
+
+
+async def csrf_protect(request: Request):
+    """
+    CSRF protection dependency for state-changing endpoints
+
+    Usage:
+        @router.post("/endpoint", dependencies=[Depends(csrf_protect)])
+    """
+    # Skip CSRF check for safe methods
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return
+
+    # Skip if CSRF protection is disabled (development)
+    if not getattr(settings, 'ENABLE_CSRF_PROTECTION', False):
+        return
+
+    token = CSRFProtection.get_token_from_request(request)
+
+    if not token or not CSRFProtection.validate_token(token):
+        log_security_event("csrf_validation_failed", {
+            "reason": "Invalid or missing CSRF token"
+        }, request)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="CSRF validation failed"
+        )
+
+
+# ============================================================================
+# IP-Based Rate Limiting
+# ============================================================================
+
+class IPRateLimiter:
+    """
+    IP-based rate limiting with sliding window
+
+    SECURITY: More granular control than global rate limiting
+    """
+
+    def __init__(self, requests_per_minute: int = 60, requests_per_hour: int = 1000):
+        self.requests_per_minute = requests_per_minute
+        self.requests_per_hour = requests_per_hour
+        self._minute_counts: Dict[str, list] = defaultdict(list)
+        self._hour_counts: Dict[str, list] = defaultdict(list)
+        self._blocked_ips: Dict[str, datetime] = {}
+        self._lock = threading.Lock()
+
+    def is_allowed(self, ip: str) -> tuple[bool, Optional[str]]:
+        """
+        Check if IP is allowed to make request
+
+        Returns:
+            Tuple of (is_allowed, reason_if_blocked)
+        """
+        now = time.time()
+
+        with self._lock:
+            # Check if IP is blocked
+            if ip in self._blocked_ips:
+                if self._blocked_ips[ip] > datetime.utcnow():
+                    return False, "IP temporarily blocked due to abuse"
+                else:
+                    del self._blocked_ips[ip]
+
+            # Clean old entries
+            minute_ago = now - 60
+            hour_ago = now - 3600
+
+            self._minute_counts[ip] = [
+                t for t in self._minute_counts[ip] if t > minute_ago]
+            self._hour_counts[ip] = [
+                t for t in self._hour_counts[ip] if t > hour_ago]
+
+            # Check limits
+            if len(self._minute_counts[ip]) >= self.requests_per_minute:
+                return False, f"Rate limit exceeded: {self.requests_per_minute}/minute"
+
+            if len(self._hour_counts[ip]) >= self.requests_per_hour:
+                return False, f"Rate limit exceeded: {self.requests_per_hour}/hour"
+
+            # Record request
+            self._minute_counts[ip].append(now)
+            self._hour_counts[ip].append(now)
+
+            return True, None
+
+    def block_ip(self, ip: str, duration_minutes: int = 60):
+        """Block an IP for a specified duration"""
+        with self._lock:
+            self._blocked_ips[ip] = datetime.utcnow(
+            ) + timedelta(minutes=duration_minutes)
+            log_security_event("ip_blocked", {
+                "ip": ip,
+                "duration_minutes": duration_minutes
+            })
+
+    def get_stats(self, ip: str) -> dict:
+        """Get rate limit stats for an IP"""
+        now = time.time()
+        with self._lock:
+            minute_count = len(
+                [t for t in self._minute_counts.get(ip, []) if t > now - 60])
+            hour_count = len(
+                [t for t in self._hour_counts.get(ip, []) if t > now - 3600])
+            return {
+                "requests_last_minute": minute_count,
+                "requests_last_hour": hour_count,
+                "minute_limit": self.requests_per_minute,
+                "hour_limit": self.requests_per_hour
+            }
+
+
+# Global IP rate limiter instance
+ip_rate_limiter = IPRateLimiter(
+    requests_per_minute=getattr(settings, 'RATE_LIMIT_PER_MINUTE', 60),
+    requests_per_hour=getattr(settings, 'RATE_LIMIT_PER_HOUR', 1000)
+)
+
+
+# ============================================================================
+# Download File Cleanup (Expiration)
+# ============================================================================
+
+class DownloadCleaner:
+    """
+    Automatic cleanup of old downloaded files
+
+    SECURITY: Prevents disk exhaustion from accumulated downloads
+    """
+
+    DEFAULT_EXPIRY_DAYS = 7
+
+    @classmethod
+    def cleanup_old_downloads(cls, expiry_days: Optional[int] = None) -> dict:
+        """
+        Remove downloaded files older than expiry_days
+
+        Args:
+            expiry_days: Number of days after which files expire
+
+        Returns:
+            Dict with cleanup statistics
+        """
+        expiry_days = expiry_days or getattr(
+            settings, 'DOWNLOAD_EXPIRY_DAYS', cls.DEFAULT_EXPIRY_DAYS)
+        expiry_time = datetime.utcnow() - timedelta(days=expiry_days)
+
+        stats = {
+            "files_deleted": 0,
+            "bytes_freed": 0,
+            "errors": []
+        }
+
+        download_dir = settings.DOWNLOAD_DIR
+
+        try:
+            for subdir in ["Audio", "Video"]:
+                subdir_path = download_dir / subdir
+                if not subdir_path.exists():
+                    continue
+
+                for file_path in subdir_path.iterdir():
+                    if not file_path.is_file():
+                        continue
+
+                    try:
+                        # Check file modification time
+                        mtime = datetime.fromtimestamp(
+                            file_path.stat().st_mtime)
+                        if mtime < expiry_time:
+                            file_size = file_path.stat().st_size
+                            file_path.unlink()
+                            stats["files_deleted"] += 1
+                            stats["bytes_freed"] += file_size
+                            logger.info(
+                                f"Cleaned up expired file: {file_path.name}")
+                    except Exception as e:
+                        stats["errors"].append(f"{file_path.name}: {str(e)}")
+                        logger.error(f"Error cleaning up {file_path}: {e}")
+
+            if stats["files_deleted"] > 0:
+                log_security_event("download_cleanup", {
+                    "files_deleted": stats["files_deleted"],
+                    "bytes_freed": stats["bytes_freed"],
+                    "expiry_days": expiry_days
+                })
+
+            return stats
+
+        except Exception as e:
+            logger.error(f"Download cleanup failed: {e}")
+            stats["errors"].append(str(e))
+            return stats
+
+    @classmethod
+    def get_download_stats(cls) -> dict:
+        """Get statistics about downloaded files"""
+        download_dir = settings.DOWNLOAD_DIR
+        stats = {
+            "total_files": 0,
+            "total_size_bytes": 0,
+            "audio_files": 0,
+            "video_files": 0,
+            "oldest_file": None,
+            "newest_file": None
+        }
+
+        try:
+            for subdir in ["Audio", "Video"]:
+                subdir_path = download_dir / subdir
+                if not subdir_path.exists():
+                    continue
+
+                for file_path in subdir_path.iterdir():
+                    if not file_path.is_file():
+                        continue
+
+                    stats["total_files"] += 1
+                    stats["total_size_bytes"] += file_path.stat().st_size
+
+                    if subdir == "Audio":
+                        stats["audio_files"] += 1
+                    else:
+                        stats["video_files"] += 1
+
+                    mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+                    if stats["oldest_file"] is None or mtime < stats["oldest_file"]:
+                        stats["oldest_file"] = mtime
+                    if stats["newest_file"] is None or mtime > stats["newest_file"]:
+                        stats["newest_file"] = mtime
+
+            # Convert datetimes to ISO strings
+            if stats["oldest_file"]:
+                stats["oldest_file"] = stats["oldest_file"].isoformat()
+            if stats["newest_file"]:
+                stats["newest_file"] = stats["newest_file"].isoformat()
+
+            return stats
+
+        except Exception as e:
+            logger.error(f"Error getting download stats: {e}")
+            return stats
+
+
+# ============================================================================
+# Content-Disposition Header Helper
+# ============================================================================
+
+def get_safe_filename(filename: str) -> str:
+    """
+    Sanitize filename for Content-Disposition header
+
+    SECURITY: Prevents header injection and ensures safe download names
+    """
+    import re
+    import urllib.parse
+
+    # Remove path separators and null bytes
+    filename = filename.replace(
+        "/", "_").replace("\\", "_").replace("\x00", "")
+
+    # Remove or replace problematic characters
+    filename = re.sub(r'[<>:"|?*]', '_', filename)
+
+    # Limit length
+    max_length = 200
+    if len(filename) > max_length:
+        name, ext = filename.rsplit(
+            '.', 1) if '.' in filename else (filename, '')
+        filename = name[:max_length -
+                        len(ext) - 1] + '.' + ext if ext else name[:max_length]
+
+    return filename
+
+
+def set_download_headers(response: Response, filename: str, content_type: str = "application/octet-stream"):
+    """
+    Set appropriate headers for file download
+
+    Args:
+        response: FastAPI Response object
+        filename: Original filename
+        content_type: MIME type of the file
+    """
+    import urllib.parse
+
+    safe_filename = get_safe_filename(filename)
+
+    # RFC 5987 compliant Content-Disposition
+    # Includes both ASCII fallback and UTF-8 encoded filename
+    ascii_filename = safe_filename.encode('ascii', 'ignore').decode()
+    utf8_filename = urllib.parse.quote(safe_filename)
+
+    response.headers["Content-Type"] = content_type
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="{ascii_filename}"; '
+        f"filename*=UTF-8''{utf8_filename}"
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+
+
+# ============================================================================
+# HTTPS Redirect
+# ============================================================================
+
+def should_redirect_to_https(request: Request) -> bool:
+    """
+    Check if request should be redirected to HTTPS
+
+    Returns True if:
+    - Not in debug mode
+    - Request is not already HTTPS
+    - HTTPS redirect is enabled
+    """
+    if settings.DEBUG:
+        return False
+
+    if not getattr(settings, 'FORCE_HTTPS', False):
+        return False
+
+    # Check if already HTTPS (also check X-Forwarded-Proto for reverse proxies)
+    if request.url.scheme == "https":
+        return False
+
+    forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
+    if forwarded_proto.lower() == "https":
+        return False
+
+    return True
+
+
+def get_https_redirect_url(request: Request) -> str:
+    """Get the HTTPS version of the current URL"""
+    url = str(request.url)
+    return url.replace("http://", "https://", 1)

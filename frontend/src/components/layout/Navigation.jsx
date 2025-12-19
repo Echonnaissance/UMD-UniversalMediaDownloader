@@ -74,6 +74,20 @@ export default function Navigation() {
           </li>
           <li role="none">
             <NavLink
+              to="/sites"
+              className={({ isActive }) =>
+                isActive ? "nav-link active" : "nav-link"
+              }
+              role="menuitem"
+            >
+              <span className="nav-icon" aria-hidden="true">
+                🌐
+              </span>
+              <span>Sites</span>
+            </NavLink>
+          </li>
+          <li role="none">
+            <NavLink
               to="/api-docs"
               className={({ isActive }) =>
                 isActive ? "nav-link active" : "nav-link"

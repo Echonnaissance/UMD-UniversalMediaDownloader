@@ -3,11 +3,14 @@ Downloads API Routes
 Handles HTTP endpoints for download operations
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Body
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from pathlib import Path
 import logging
+import mimetypes
 
 from app.core.database import get_db
 from app.services.download_service import DownloadService
@@ -26,7 +29,7 @@ from app.core.exceptions import (
     YouTubeDownloaderException
 )
 from app.services.download_queue import get_download_queue
-from app.core.security import sanitize_url, check_disk_space, check_user_quota
+from app.core.security import sanitize_url, check_disk_space, check_user_quota, get_safe_filename
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -374,5 +377,89 @@ async def create_batch_downloads(
     except YouTubeDownloaderException as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@router.get("/{download_id}/file")
+async def download_file(
+    download_id: int,
+    service: DownloadService = Depends(get_download_service)
+):
+    """
+    Download a completed file
+
+    SECURITY: 
+    - Validates download exists and is complete
+    - Ensures file is within allowed directory
+    - Sets proper Content-Disposition headers
+    """
+    try:
+        # Get download record
+        download = await service.get_download(download_id)
+
+        # Check download is complete
+        if download.status != DownloadStatus.COMPLETED.value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Download not ready. Status: {download.status}"
+            )
+
+        # Check file path exists
+        if not download.file_path:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="File path not found in download record"
+            )
+
+        file_path = Path(download.file_path)
+
+        # SECURITY: Verify file is within download directory
+        download_dir = settings.DOWNLOAD_DIR.resolve()
+        try:
+            file_path = file_path.resolve()
+            if not str(file_path).startswith(str(download_dir)):
+                logger.warning(
+                    f"Path traversal attempt blocked: {download.file_path}")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied"
+                )
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid file path"
+            )
+
+        # Check file exists
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="File no longer exists on server"
+            )
+
+        # Determine MIME type
+        mime_type, _ = mimetypes.guess_type(str(file_path))
+        if not mime_type:
+            mime_type = "application/octet-stream"
+
+        # Get safe filename for Content-Disposition
+        safe_filename = get_safe_filename(file_path.name)
+
+        logger.info(
+            f"Serving file: {file_path.name} for download {download_id}")
+
+        return FileResponse(
+            path=str(file_path),
+            filename=safe_filename,
+            media_type=mime_type,
+            headers={
+                "X-Content-Type-Options": "nosniff"
+            }
+        )
+
+    except DownloadNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e)
         )

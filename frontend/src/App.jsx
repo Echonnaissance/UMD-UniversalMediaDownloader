@@ -9,6 +9,7 @@ import DownloadPage from "./pages/DownloadPage";
 import HistoryPage from "./pages/HistoryPage";
 import SettingsPage from "./pages/SettingsPage";
 import ApiDocsPage from "./pages/ApiDocsPage";
+import SupportedSitesPage from "./pages/SupportedSitesPage";
 
 function App() {
   return (
@@ -27,6 +28,7 @@ function App() {
                 <Route path="/history" element={<HistoryPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/api-docs" element={<ApiDocsPage />} />
+                <Route path="/sites" element={<SupportedSitesPage />} />
               </Routes>
             </main>
             <Footer />
