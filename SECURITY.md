@@ -148,7 +148,7 @@ RATE_LIMIT_ENABLED=true
 RATE_LIMIT_PER_MINUTE=30
 RATE_LIMIT_PER_HOUR=500
 MAX_REQUEST_SIZE=524288
-DATABASE_URL="postgresql://ytdl_user:secure_password@localhost:5432/ytdl_db"
+DATABASE_URL="postgresql://umd_user:secure_password@localhost:5432/ytdl_db"
 CORS_ORIGINS='["https://yourdomain.com"]'
 LOG_LEVEL="WARNING"
 ```

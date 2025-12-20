@@ -439,10 +439,10 @@ sudo apt install -y nodejs
 
 ```bash
 # Create dedicated user for application
-sudo adduser --system --group --home /opt/youtube-downloader ytdl
+sudo adduser --system --group --home /opt/youtube-downloader umd
 
 # Switch to application user
-sudo su - ytdl
+sudo su - umd
 ```
 
 ### 3. Clone and Setup Application
@@ -477,9 +477,9 @@ sudo -u postgres psql
 
 # Create database and user
 CREATE DATABASE youtube_downloader;
-CREATE USER ytdl_user WITH PASSWORD 'your-secure-password';
-GRANT ALL PRIVILEGES ON DATABASE youtube_downloader TO ytdl_user;
-ALTER DATABASE youtube_downloader OWNER TO ytdl_user;
+CREATE USER umd_user WITH PASSWORD 'your-secure-password';
+GRANT ALL PRIVILEGES ON DATABASE youtube_downloader TO umd_user;
+ALTER DATABASE youtube_downloader OWNER TO umd_user;
 \q
 ```
 
@@ -521,7 +521,7 @@ RATE_LIMIT_PER_MINUTE=60
 RATE_LIMIT_PER_HOUR=1000
 
 # Database
-DATABASE_URL="postgresql://ytdl_user:your-secure-password@localhost/youtube_downloader"
+DATABASE_URL="postgresql://umd_user:your-secure-password@localhost/youtube_downloader"
 
 # CORS - Update with your domain!
 CORS_ORIGINS='["https://yourdomain.com"]'
@@ -566,8 +566,8 @@ After=network.target postgresql.service
 
 [Service]
 Type=simple
-User=ytdl
-Group=ytdl
+User=umd
+Group=umd
 WorkingDirectory=/opt/youtube-downloader/backend
 Environment="PATH=/opt/youtube-downloader/backend/venv/bin"
 ExecStart=/opt/youtube-downloader/backend/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
@@ -743,7 +743,7 @@ services:
     image: postgres:15
     environment:
       POSTGRES_DB: youtube_downloader
-      POSTGRES_USER: ytdl_user
+      POSTGRES_USER: umd_user
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -754,7 +754,7 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      DATABASE_URL: postgresql://ytdl_user:${DB_PASSWORD}@db/youtube_downloader
+      DATABASE_URL: postgresql://umd_user:${DB_PASSWORD}@db/youtube_downloader
       SECRET_KEY: ${SECRET_KEY}
       API_KEY: ${API_KEY}
       ENABLE_API_KEY_AUTH: true
@@ -912,7 +912,7 @@ DB_NAME="youtube_downloader"
 
 mkdir -p $BACKUP_DIR
 
-pg_dump -U ytdl_user $DB_NAME | gzip > $BACKUP_DIR/${DB_NAME}_${DATE}.sql.gz
+pg_dump -U umd_user $DB_NAME | gzip > $BACKUP_DIR/${DB_NAME}_${DATE}.sql.gz
 
 # Keep only last 30 days
 find $BACKUP_DIR -name "*.sql.gz" -mtime +30 -delete
@@ -941,7 +941,7 @@ Create `/etc/logrotate.d/youtube-downloader`:
     compress
     delaycompress
     notifempty
-    create 0644 ytdl ytdl
+    create 0644 umd umd
     sharedscripts
     postrotate
         systemctl reload youtube-downloader
@@ -998,7 +998,7 @@ sudo journalctl -u youtube-downloader -n 100
 sudo netstat -tlnp | grep :8000
 
 # Verify environment variables
-sudo -u ytdl cat /opt/youtube-downloader/backend/.env
+sudo -u umd cat /opt/youtube-downloader/backend/.env
 ```
 
 ### Database Connection Issues
@@ -1011,7 +1011,7 @@ sudo -u postgres psql -c "\l"
 sudo -u postgres psql -c "\l youtube_downloader"
 
 # Test connection with app user
-psql -U ytdl_user -d youtube_downloader -h localhost
+psql -U umd_user -d youtube_downloader -h localhost
 ```
 
 ### High Memory Usage
@@ -1062,7 +1062,7 @@ git reset --hard <commit-hash>
 
 # Restore database backup (if needed)
 gunzip < /opt/backups/postgres/youtube_downloader_YYYYMMDD.sql.gz | \
-  psql -U ytdl_user youtube_downloader
+  psql -U umd_user youtube_downloader
 
 # Restart service
 sudo systemctl start youtube-downloader
