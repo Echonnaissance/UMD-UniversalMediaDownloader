@@ -3,6 +3,8 @@ YT-DLP Service
 Wrapper for yt-dlp executable with progress tracking and error handling
 """
 import subprocess
+import shutil
+import logging
 import asyncio
 import json
 import re
@@ -30,6 +32,11 @@ class YTDLPService:
         self.download_dir = str(settings.DOWNLOAD_DIR)
         self._ytdlp_available = os.path.exists(self.ytdlp_path)
         self._ffmpeg_available = os.path.exists(self.ffmpeg_path)
+        # Detect available JS runtime for yt-dlp (node preferred)
+        self.js_runtime_args = self._detect_js_runtime_args()
+
+        # Module logger
+        self.logger = logging.getLogger(__name__)
 
         # Log warning if tools are missing but don't crash
         if not self._ytdlp_available:
@@ -80,13 +87,35 @@ class YTDLPService:
             # Fall back: use yt-dlp's --cookies-from-browser (may fail on some systems)
             cmd.extend(["--cookies-from-browser", settings.COOKIE_BROWSER])
 
+        def _detect_js_runtime_args(self) -> Optional[list]:
+            """Detect node or deno in PATH and return yt-dlp js runtime args."""
+            try:
+                node_path = shutil.which("node")
+                if node_path:
+                    return ["--js-runtimes", "node"]
+                deno_path = shutil.which("deno")
+                if deno_path:
+                    return ["--js-runtimes", "deno"]
+            except Exception:
+                pass
+            return None
+
+        def _add_js_runtime_args(self, cmd: list) -> None:
+            """Append detected js runtime args to command if available."""
+            if self.js_runtime_args:
+                # insert before the URL (assume URL is last positional arg)
+                # but simply extend early so flags appear before URL
+                # many commands append URL at the end, so safe to extend now
+                cmd.extend(self.js_runtime_args)
+
     def _export_cookies_via_browser(self, browser_name: Optional[str]) -> Optional[str]:
         """
         Try to export cookies from the user's browser to a Netscape-format file.
         Returns the path to the exported cookies file, or None on failure.
         """
         try:
-            import browser_cookie3
+            import importlib
+            browser_cookie3 = importlib.import_module("browser_cookie3")
         except Exception:
             return None
 
@@ -153,6 +182,9 @@ class YTDLPService:
         # Add cookie support (needed for Twitter/X, Instagram, etc.)
         self._add_cookie_args(cmd)
 
+        # Prefer a JS runtime when available to avoid SABR streaming issues
+        self._add_js_runtime_args(cmd)
+
         cmd.append(url)
 
         result = subprocess.run(
@@ -217,6 +249,8 @@ class YTDLPService:
 
         # Add cookie support (needed for Twitter/X, Instagram, etc.)
         self._add_cookie_args(cmd)
+        # Prefer a JS runtime when available to avoid SABR streaming issues
+        self._add_js_runtime_args(cmd)
 
         cmd.append(url)
 
@@ -307,6 +341,9 @@ class YTDLPService:
         # Add cookie support (needed for Twitter/X, Instagram, etc.)
         self._add_cookie_args(cmd)
 
+        # Prefer a JS runtime when available to avoid SABR streaming issues
+        self._add_js_runtime_args(cmd)
+
         cmd.append(url)
 
         return await self._execute_download(cmd, progress_callback)
@@ -347,6 +384,9 @@ class YTDLPService:
         # Add cookie support (needed for Twitter/X, Instagram, etc.)
         self._add_cookie_args(cmd)
 
+        # Prefer a JS runtime when available to avoid SABR streaming issues
+        self._add_js_runtime_args(cmd)
+
         if embed_thumbnail:
             cmd.append("--embed-thumbnail")
 
@@ -366,6 +406,24 @@ class YTDLPService:
         for attempt in range(max_retries):
             # Rebuild cmd for each attempt
             cmd = list(base_cmd)
+
+            # On subsequent attempts, try adding UA to mimic a browser
+            if attempt >= 1 and '--user-agent' not in cmd:
+                try:
+                    cmd.insert(-1, '--user-agent')
+                    cmd.insert(-1, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36')
+                except Exception:
+                    pass
+
+            # On later attempts, disable part files and resume to avoid ranged 403s
+            if attempt >= 2 and '--no-part' not in cmd:
+                cmd.extend(['--no-part', '--no-continue'])
+
+            # Log the final command for debugging (sanitized)
+            try:
+                self.logger.debug("Running yt-dlp command: %s", " ".join(cmd))
+            except Exception:
+                pass
 
             process = subprocess.Popen(
                 cmd,
@@ -437,10 +495,10 @@ class YTDLPService:
                 if '--user-agent' not in base_cmd:
                     # Insert before the URL argument (assume URL is last arg)
                     try:
-                        # Place UA right before the final URL argument
+                        # Place UA right before the final URL argument (insert flag first)
+                        base_cmd.insert(-1, '--user-agent')
                         base_cmd.insert(
                             -1, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36')
-                        base_cmd.insert(-1, '--user-agent')
                     except Exception:
                         pass
                 continue
