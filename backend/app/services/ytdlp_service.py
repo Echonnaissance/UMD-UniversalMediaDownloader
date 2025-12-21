@@ -416,12 +416,18 @@ class YTDLPService:
                     pass
 
             # On later attempts, disable part files and resume to avoid ranged 403s
-            if attempt >= 2 and '--no-part' not in cmd:
+            if attempt >= 2 and '--no-part' not in cmd and getattr(settings, 'YTDLP_NO_PART_FALLBACK', False):
                 cmd.extend(['--no-part', '--no-continue'])
 
-            # Log the final command for debugging (sanitized)
+            # Log the final command for debugging (sanitized). Respect YTDLP_DEBUG
             try:
-                self.logger.debug("Running yt-dlp command: %s", " ".join(cmd))
+                if getattr(settings, 'YTDLP_DEBUG', False):
+                    # Make this more visible when debugging is enabled
+                    self.logger.info(
+                        "Running yt-dlp command: %s", " ".join(cmd))
+                else:
+                    self.logger.debug(
+                        "Running yt-dlp command: %s", " ".join(cmd))
             except Exception:
                 pass
 

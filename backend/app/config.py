@@ -114,6 +114,15 @@ class Settings(BaseSettings):
     # Request Size Limits (in bytes)
     MAX_REQUEST_SIZE: int = 1024 * 1024  # 1 MB
 
+    # yt-dlp runtime / fallback settings
+    # When True, if downloads repeatedly fail with 403 on resume, the
+    # service will append `--no-part --no-continue` on later retries.
+    YTDLP_NO_PART_FALLBACK: bool = True
+
+    # When True, print the final yt-dlp command at INFO level for easier debugging
+    # (otherwise it is logged at DEBUG level).
+    YTDLP_DEBUG: bool = False
+
     # Download Limits (SECURITY: Prevent disk exhaustion)
     MAX_FILE_SIZE: int = 5 * 1024 * 1024 * 1024  # 5 GB per file
     MAX_USER_QUOTA: int = 100 * 1024 * 1024 * 1024  # 100 GB total per user
