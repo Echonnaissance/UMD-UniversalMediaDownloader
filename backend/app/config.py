@@ -34,7 +34,8 @@ class Settings(BaseSettings):
     DEBUG: bool = True
 
     # Server Settings
-    HOST: str = "0.0.0.0"
+    # Bind to localhost by default for safer local development
+    HOST: str = "127.0.0.1"
     PORT: int = 8000
     RELOAD: bool = True
 
