@@ -338,7 +338,7 @@ class YTDLPService:
             self.ytdlp_path,
             "-o", output_template,
             "--ffmpeg-location", self.ffmpeg_path,
-            "-f", "bestaudio",
+            "-f", "bestvideo+bestaudio/best",
             "--extract-audio",
             "--audio-format", format,
             "--no-playlist",
@@ -355,71 +355,101 @@ class YTDLPService:
         return await self._execute_download(cmd, progress_callback)
 
     def _execute_download_sync(self, cmd: list, progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None) -> str:
-        """Synchronous helper for _execute_download"""
+        """Synchronous helper for _execute_download with retry/backoff for 403 errors"""
         import time
 
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            universal_newlines=True,
-            bufsize=1
-        )
+        # Keep an immutable base copy of the command so retries start fresh
+        base_cmd = list(cmd)
+        max_retries = 3
+        base_delay = 2  # seconds
 
-        # SECURITY: Timeout for long-running downloads (30 minutes max)
-        timeout_seconds = 1800  # 30 minutes
-        start_time = time.time()
+        for attempt in range(max_retries):
+            # Rebuild cmd for each attempt
+            cmd = list(base_cmd)
 
-        output_lines = []
-        while True:
-            if process.stdout is None:
-                break
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                universal_newlines=True,
+                bufsize=1
+            )
 
-            line = process.stdout.readline()
-            if line == '' and process.poll() is not None:
-                break
+            # SECURITY: Timeout for long-running downloads (30 minutes max)
+            timeout_seconds = 1800  # 30 minutes
+            start_time = time.time()
 
-            if line:
-                output_lines.append(line.strip())
-                if progress_callback:
-                    progress_info = self._parse_progress(line)
-                    if progress_info:
-                        progress_callback(progress_info)
+            output_lines = []
+            while True:
+                if process.stdout is None:
+                    break
 
-            # SECURITY: Check for timeout
-            if time.time() - start_time > timeout_seconds:
-                process.kill()
-                raise YTDLPError(
-                    f"Download timed out after {timeout_seconds} seconds")
+                line = process.stdout.readline()
+                if line == '' and process.poll() is not None:
+                    break
 
-        return_code = process.poll()
-        if return_code != 0:
-            error_output = '\n'.join(output_lines[-10:])
+                if line:
+                    output_lines.append(line.strip())
+                    if progress_callback:
+                        progress_info = self._parse_progress(line)
+                        if progress_info:
+                            progress_callback(progress_info)
+
+                # SECURITY: Check for timeout
+                if time.time() - start_time > timeout_seconds:
+                    process.kill()
+                    raise YTDLPError(
+                        f"Download timed out after {timeout_seconds} seconds")
+
+            return_code = process.poll()
+            if return_code == 0:
+                # Success, extract filename
+                downloaded_file = None
+                for line in output_lines:
+                    # Try various patterns to extract the file path
+                    if "Destination:" in line:
+                        match = re.search(r'Destination:\s+(.+)$', line)
+                        if match:
+                            downloaded_file = match.group(1).strip()
+                    elif "Merging formats into" in line:
+                        match = re.search(r'into\s+"(.+?)"', line)
+                        if match:
+                            downloaded_file = match.group(1).strip()
+                    elif "has already been downloaded" in line:
+                        match = re.search(
+                            r'\[download\]\s+(.+?)\s+has already been downloaded', line)
+                        if match:
+                            downloaded_file = match.group(1).strip()
+
+                if downloaded_file and os.path.exists(downloaded_file):
+                    return downloaded_file
+                return "Download complete (file path could not be determined)"
+
+            # Non-zero return code: check recent output for 403/Forbidden
+            error_output = '\n'.join(output_lines[-20:])
+            if ('403' in error_output or 'Forbidden' in error_output) and attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                print(
+                    f"[!] Retry {attempt + 1} in {delay}s due to 403/Forbidden response...")
+                time.sleep(delay)
+                # Add a browser-like user-agent on retries if not already present
+                if '--user-agent' not in base_cmd:
+                    # Insert before the URL argument (assume URL is last arg)
+                    try:
+                        # Place UA right before the final URL argument
+                        base_cmd.insert(
+                            -1, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36')
+                        base_cmd.insert(-1, '--user-agent')
+                    except Exception:
+                        pass
+                continue
+
+            # If not a 403 or retries exhausted, raise error
             raise YTDLPError(f"Download failed: {error_output}")
 
-        # Extract filename from output
-        downloaded_file = None
-        for line in output_lines:
-            # Try various patterns to extract the file path
-            if "Destination:" in line:
-                match = re.search(r'Destination:\s+(.+)$', line)
-                if match:
-                    downloaded_file = match.group(1).strip()
-            elif "Merging formats into" in line:
-                match = re.search(r'into\s+"(.+?)"', line)
-                if match:
-                    downloaded_file = match.group(1).strip()
-            elif "has already been downloaded" in line:
-                match = re.search(
-                    r'\[download\]\s+(.+?)\s+has already been downloaded', line)
-                if match:
-                    downloaded_file = match.group(1).strip()
-
-        if downloaded_file and os.path.exists(downloaded_file):
-            return downloaded_file
-
-        return "Download complete (file path could not be determined)"
+        # Should not reach here
+        raise YTDLPError("Max retries exceeded for download")
 
     async def _execute_download(
         self,
