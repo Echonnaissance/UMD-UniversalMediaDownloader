@@ -6,6 +6,7 @@ export default function DownloadedPage() {
   const [downloads, setDownloads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [selected, setSelected] = useState(null);
 
   useEffect(() => {
     fetchDownloads();
@@ -18,6 +19,7 @@ export default function DownloadedPage() {
         limit: 200,
       });
       setDownloads(data || []);
+      if (!selected && data && data.length > 0) setSelected(data[0]);
       setError(null);
     } catch (err) {
       console.error(err);
@@ -34,40 +36,52 @@ export default function DownloadedPage() {
     <div className="downloaded-page">
       <h2>Downloaded Media</h2>
       {downloads.length === 0 && <p>No completed downloads yet.</p>}
-      <div className="downloaded-list">
-        {downloads.map((d) => (
-          <div className="downloaded-item" key={d.id}>
-            <h3 className="downloaded-title">
-              {d.title || d.file_name || "Untitled"}
-            </h3>
-            {d.thumbnail_url && (
-              <img
-                src={d.thumbnail_url}
-                alt={d.title}
-                className="downloaded-thumb"
-              />
-            )}
-            <div className="player-wrap">
-              {d.media_url ? (
+
+      <div className="downloaded-container">
+        <div className="player-column">
+          {selected ? (
+            <>
+              <div className="player-card">
+                <h3 className="player-title">
+                  {selected.title || selected.file_name}
+                </h3>
                 <video
                   controls
                   preload="metadata"
-                  src={d.media_url}
-                  className="downloaded-video"
+                  src={
+                    selected.media_url || `/api/downloads/${selected.id}/file`
+                  }
+                  className="main-player"
                 />
-              ) : d.file_path ? (
-                <video
-                  controls
-                  preload="metadata"
-                  src={`/api/downloads/${d.id}/file`}
-                  className="downloaded-video"
-                />
-              ) : (
-                <p>File not available</p>
-              )}
+              </div>
+            </>
+          ) : (
+            <p>Select a video on the right to play</p>
+          )}
+        </div>
+
+        <aside className="list-column" aria-label="Downloaded videos">
+          {downloads.map((d) => (
+            <div
+              key={d.id}
+              className={`list-item ${
+                selected && selected.id === d.id ? "active" : ""
+              }`}
+              onClick={() => setSelected(d)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => e.key === "Enter" && setSelected(d)}
+            >
+              <img src={d.thumbnail_url} alt={d.title} className="list-thumb" />
+              <div className="list-meta">
+                <div className="list-title">{d.title || d.file_name}</div>
+                <div className="list-sub">
+                  {d.duration ? `${Math.round(d.duration)}s` : ""}
+                </div>
+              </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </aside>
       </div>
     </div>
   );
