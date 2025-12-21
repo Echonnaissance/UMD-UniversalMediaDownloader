@@ -111,6 +111,13 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MINUTE: int = 60  # Requests per minute
     RATE_LIMIT_PER_HOUR: int = 10000  # Requests per hour
 
+    # Local media serving (opt-in)
+    # WARNING: Enabling this exposes files on disk to the running server.
+    # Only enable in local/dev environments and set explicit allowed folders.
+    # For local smoke testing default to user's Downloads. Set via .env in production/dev.
+    ALLOW_LOCAL_MEDIA: bool = True
+    EXTRA_MEDIA_DIRS: List[Path] = [
+        Path(r"C:/Users/Anthony Ferraro/Downloads")]
     # Request Size Limits (in bytes)
     MAX_REQUEST_SIZE: int = 1024 * 1024  # 1 MB
 

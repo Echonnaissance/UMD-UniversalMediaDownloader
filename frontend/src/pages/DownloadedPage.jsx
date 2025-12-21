@@ -18,6 +18,9 @@ export default function DownloadedPage() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [volume, setVolume] = useState(1);
   const thumbCacheRef = useRef(new Map());
+  const [localFiles, setLocalFiles] = useState([]);
+  const fileInputRef = useRef(null);
+  const folderInputRef = useRef(null);
 
   useEffect(() => {
     const v = videoRef.current;
@@ -142,6 +145,8 @@ export default function DownloadedPage() {
     fetchDownloads();
   }, []);
 
+  const combinedList = [...localFiles, ...downloads];
+
   useEffect(() => {
     const prevTitle = document.title;
     document.title = "Video Player";
@@ -227,6 +232,54 @@ export default function DownloadedPage() {
     };
   }, [downloads]);
 
+  const isAbsolute = (p) => {
+    if (!p) return false;
+    return (
+      p.startsWith("http") ||
+      p.startsWith("blob:") ||
+      p.startsWith("data:") ||
+      p.startsWith("file:")
+    );
+  };
+
+  const addLocalFiles = (fileList) => {
+    const arr = Array.from(fileList || []);
+    if (arr.length === 0) return;
+    const now = Date.now();
+    const newItems = arr
+      .filter((f) => f && f.type && f.type.startsWith("video/"))
+      .map((f, idx) => {
+        const id = `local-${now}-${idx}`;
+        const blob = URL.createObjectURL(f);
+        return {
+          id,
+          title: f.webkitRelativePath || f.name,
+          file_name: f.name,
+          file_size: f.size,
+          media_url: blob,
+          thumbnail_url: null,
+          duration: null,
+          file_path: null,
+          __local_file: true,
+        };
+      });
+
+    setLocalFiles((prev) => [...newItems, ...prev]);
+  };
+
+  const handleFileInput = (e) => {
+    const files = e.target.files;
+    addLocalFiles(files);
+    // reset input so selecting same files again triggers change
+    e.target.value = null;
+  };
+
+  const handleFolderInput = (e) => {
+    const files = e.target.files;
+    addLocalFiles(files);
+    e.target.value = null;
+  };
+
   useEffect(() => {
     // Auto-play selected when changed
     if (selected && autoplay && videoRef.current) {
@@ -240,7 +293,7 @@ export default function DownloadedPage() {
     }
   }, [selected, autoplay]);
 
-  const findIndex = (item) => downloads.findIndex((d) => d.id === item.id);
+  const findIndex = (item) => combinedList.findIndex((d) => d.id === item.id);
 
   const handleNext = () => {
     if (!selected) return;
@@ -303,10 +356,46 @@ export default function DownloadedPage() {
 
   return (
     <div className="downloaded-page">
-      {downloads.length === 0 && <p>No completed downloads yet.</p>}
+      {combinedList.length === 0 && <p>No completed downloads yet.</p>}
 
       <div className="downloaded-container" ref={containerRef}>
         <div className="player-column">
+          <div className="local-open-toolbar">
+            <button
+              className="btn btn-small"
+              onClick={() =>
+                fileInputRef.current && fileInputRef.current.click()
+              }
+            >
+              Open File(s)
+            </button>
+            <button
+              className="btn btn-small"
+              onClick={() =>
+                folderInputRef.current && folderInputRef.current.click()
+              }
+            >
+              Open Folder
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="video/*"
+              multiple
+              style={{ display: "none" }}
+              onChange={handleFileInput}
+            />
+            <input
+              ref={folderInputRef}
+              type="file"
+              // webkitdirectory enables folder selection in Chromium-based browsers
+              webkitdirectory
+              directory
+              multiple
+              style={{ display: "none" }}
+              onChange={handleFolderInput}
+            />
+          </div>
           {selected ? (
             <div className={`player-card ${theater ? "theater" : ""}`}>
               {/* prefer media_url (served at /media) and convert to absolute URL so cross-origin range requests work consistently */}
@@ -326,7 +415,7 @@ export default function DownloadedPage() {
                 };
 
                 const src = selected.media_url
-                  ? selected.media_url.startsWith("http")
+                  ? isAbsolute(selected.media_url)
                     ? selected.media_url
                     : `${backendOrigin}${encodePath(selected.media_url)}`
                   : `${backendOrigin}/api/downloads/${selected.id}/file`;
@@ -468,7 +557,7 @@ export default function DownloadedPage() {
           aria-label="Downloaded videos"
           ref={listRef}
         >
-          {downloads.map((d) => (
+          {combinedList.map((d) => (
             <div
               key={d.id}
               className={`list-item ${
@@ -498,7 +587,7 @@ export default function DownloadedPage() {
                 // Append a cache-busting query param so clients always fetch the
                 // latest thumbnail instead of relying on cached 304 responses.
                 const thumbSrc = d.thumbnail_url
-                  ? d.thumbnail_url.startsWith("http")
+                  ? isAbsolute(d.thumbnail_url)
                     ? d.thumbnail_url +
                       (d.updated_at
                         ? (d.thumbnail_url.includes("?") ? "&" : "?") +

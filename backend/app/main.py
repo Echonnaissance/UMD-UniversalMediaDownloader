@@ -4,6 +4,7 @@ Main application file that sets up the FastAPI app, middleware, and routes
 """
 from app.api.routes import settings as settings_router
 from app.api.routes import downloads
+from app.api.routes import local_media
 from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -441,6 +442,7 @@ async def cleanup_downloads(expiry_days: int = 7):
 
 app.include_router(downloads.router, prefix="/api")
 app.include_router(settings_router.router, prefix="/api")
+app.include_router(local_media.router, prefix="/api")
 # app.include_router(queue.router, prefix="/api")  # TODO: Create queue routes
 # app.include_router(history.router, prefix="/api")  # TODO: Create history routes
 
