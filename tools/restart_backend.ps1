@@ -1,15 +1,16 @@
 # Restart backend: stop processes on port 8000, then start uvicorn
 try {
     $conns = Get-NetTCPConnection -LocalPort 8000 -ErrorAction Stop
-} catch {
+}
+catch {
     $conns = @()
 }
 $pids = @()
 foreach ($c in $conns) { $pids += $c.OwningProcess }
 if ($pids.Count -gt 0) {
     foreach ($pitem in $pids) {
-            try { Stop-Process -Id $pitem -Force -ErrorAction SilentlyContinue } catch {}
-        }
+        try { Stop-Process -Id $pitem -Force -ErrorAction SilentlyContinue } catch {}
+    }
 }
 # Start uvicorn in background using venv/python if available, fallback to python on PATH
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -22,6 +23,7 @@ else { $pythonExe = 'python' }
 Write-Host "Using Python executable: $pythonExe"
 
 # Use Start-Process with separate args to avoid quoting issues
-$args = @('-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8000','--reload')
-Start-Process -FilePath $pythonExe -ArgumentList $args -NoNewWindow -WindowStyle Hidden
-Write-Host "Issued backend start using: $pythonExe $($args -join ' ')" 
+# Avoid assigning to the automatic `$args` variable (PSScriptAnalyzer warning)
+$uvicornArgs = @('-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8000', '--reload')
+Start-Process -FilePath $pythonExe -ArgumentList $uvicornArgs -WindowStyle Hidden
+Write-Host "Issued backend start using: $pythonExe $($uvicornArgs -join ' ')"
