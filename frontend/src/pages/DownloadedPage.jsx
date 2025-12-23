@@ -51,6 +51,14 @@ export default function DownloadedPage() {
   const folderInputRef = useRef(null);
   const [largePlayer, setLargePlayer] = useState(false);
   const [showList, setShowList] = useState(true);
+  const [preserveAspect, setPreserveAspect] = useState(() => {
+    try {
+      const v = localStorage.getItem("umd.preserveAspect");
+      return v === null ? false : v === "1";
+    } catch (e) {
+      return false;
+    }
+  });
   const [navigationMode, setNavigationMode] = useState(() => {
     try {
       return localStorage.getItem("umd.navMode") || "list";
@@ -72,9 +80,16 @@ export default function DownloadedPage() {
         const h = vid.videoHeight;
         const videoEl =
           playerCardRef.current?.querySelector?.(".video-element");
-        if (videoEl && w && h) {
-          // CSS expects aspect like "16/9"
-          videoEl.style.setProperty("--video-aspect", `${w}/${h}`);
+        if (videoEl) {
+          if (preserveAspect && w && h) {
+            // CSS expects aspect like "16/9"
+            videoEl.style.setProperty("--video-aspect", `${w}/${h}`);
+          } else {
+            // remove any custom aspect so CSS fallback (16/9) applies
+            try {
+              videoEl.style.removeProperty("--video-aspect");
+            } catch (e) {}
+          }
         }
       } catch (e) {}
     };
@@ -118,7 +133,14 @@ export default function DownloadedPage() {
       v.removeEventListener("playing", onPlaying);
       v.removeEventListener("loadedmetadata", onLoadedMeta);
     };
-  }, [selected]);
+  }, [selected, preserveAspect]);
+
+  // Persist preserveAspect setting
+  useEffect(() => {
+    try {
+      localStorage.setItem("umd.preserveAspect", preserveAspect ? "1" : "0");
+    } catch (e) {}
+  }, [preserveAspect]);
 
   // Persist upNextEnabled setting
   useEffect(() => {
@@ -1250,6 +1272,14 @@ export default function DownloadedPage() {
                           onChange={(e) => setShowCustom(e.target.checked)}
                         />
                         Show custom controls
+                      </label>
+                      <label className="more-option">
+                        <input
+                          type="checkbox"
+                          checked={preserveAspect}
+                          onChange={(e) => setPreserveAspect(e.target.checked)}
+                        />
+                        Preserve intrinsic aspect ratio
                       </label>
                     </div>
                   )}
