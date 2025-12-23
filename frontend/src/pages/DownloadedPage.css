@@ -628,6 +628,13 @@
   gap: 0.5rem;
   font-size: 0.9rem;
 }
+/* Small hint text shown under options */
+.more-option-hint {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin-left: 28px; /* align with checkbox text */
+  max-width: 28rem;
+}
 .desc-toggle-bottom {
   align-self: flex-start;
   padding: 0.25rem 0.5rem;

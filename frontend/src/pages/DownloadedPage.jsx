@@ -1280,6 +1280,11 @@ export default function DownloadedPage() {
                           onChange={(e) => setPreserveAspect(e.target.checked)}
                         />
                         Preserve intrinsic aspect ratio
+                        <div className="more-option-hint">
+                          When enabled the player matches each video's native
+                          aspect ratio; otherwise the player stays 16:9 and
+                          videos are letterboxed.
+                        </div>
                       </label>
                     </div>
                   )}
