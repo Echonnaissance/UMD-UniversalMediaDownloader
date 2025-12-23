@@ -218,39 +218,6 @@ export default function DownloadedPage() {
 
   // load persisted settings on mount (default autoplay ON)
   useEffect(() => {
-    // compute and expose exact player/list dimensions as CSS variables
-    const computeLayout = () => {
-      try {
-        const container = containerRef.current || document.querySelector('.downloaded-container');
-        const listEl = listRef.current || document.querySelector('.list-column');
-        if (!container || !listEl) return;
-        const cRect = container.getBoundingClientRect();
-        const lRect = listEl.getBoundingClientRect();
-        // gap is the flex gap between columns
-        const gap = parseFloat(getComputedStyle(container).gap) || 8;
-        // compute player width as remaining width after list and gap
-        const playerWidth = Math.max(0, Math.round(cRect.width - lRect.width - gap));
-        // expose values for CSS and debugging
-        document.documentElement.style.setProperty('--computed-player-width', `${playerWidth}px`);
-        document.documentElement.style.setProperty('--computed-list-width', `${Math.round(lRect.width)}px`);
-        document.documentElement.style.setProperty('--computed-gap', `${gap}px`);
-      } catch (e) {}
-    };
-
-    computeLayout();
-    window.addEventListener('resize', computeLayout);
-    // also recompute when fonts/images load
-    window.addEventListener('load', computeLayout);
-    const obs = new MutationObserver(computeLayout);
-    obs.observe(document.body, { childList: true, subtree: true });
-
-    // cleanup
-    return () => {
-      window.removeEventListener('resize', computeLayout);
-      window.removeEventListener('load', computeLayout);
-      try { obs.disconnect(); } catch (e) {}
-    };
-  }, []);
     try {
       const savedVol = localStorage.getItem("umd.volume");
       if (savedVol !== null) {
@@ -270,6 +237,58 @@ export default function DownloadedPage() {
       const savedTheater = localStorage.getItem("umd.theater");
       if (savedTheater !== null) setTheater(savedTheater === "1");
     } catch (err) {}
+  }, []);
+
+  // compute and expose exact player/list dimensions as CSS variables
+  useEffect(() => {
+    const computeLayout = () => {
+      try {
+        const container =
+          containerRef.current ||
+          document.querySelector(".downloaded-container");
+        const listEl =
+          listRef.current || document.querySelector(".list-column");
+        if (!container || !listEl) return;
+        const cRect = container.getBoundingClientRect();
+        const lRect = listEl.getBoundingClientRect();
+        // gap is the flex gap between columns
+        const gap = parseFloat(getComputedStyle(container).gap) || 8;
+        // compute player width as remaining width after list and gap
+        const playerWidth = Math.max(
+          0,
+          Math.round(cRect.width - lRect.width - gap)
+        );
+        // expose values for CSS and debugging
+        document.documentElement.style.setProperty(
+          "--computed-player-width",
+          `${playerWidth}px`
+        );
+        document.documentElement.style.setProperty(
+          "--computed-list-width",
+          `${Math.round(lRect.width)}px`
+        );
+        document.documentElement.style.setProperty(
+          "--computed-gap",
+          `${gap}px`
+        );
+      } catch (e) {}
+    };
+
+    computeLayout();
+    window.addEventListener("resize", computeLayout);
+    // also recompute when fonts/images load
+    window.addEventListener("load", computeLayout);
+    const obs = new MutationObserver(computeLayout);
+    obs.observe(document.body, { childList: true, subtree: true });
+
+    // cleanup
+    return () => {
+      window.removeEventListener("resize", computeLayout);
+      window.removeEventListener("load", computeLayout);
+      try {
+        obs.disconnect();
+      } catch (e) {}
+    };
   }, []);
 
   // Keep the list column height in sync with the visible video area.
