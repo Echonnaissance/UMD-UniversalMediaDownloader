@@ -1360,27 +1360,7 @@ export default function DownloadedPage() {
                         />
                         Enable Up Next overlay
                       </label>
-                      <label className="more-option">
-                        <input
-                          type="checkbox"
-                          checked={showCustom}
-                          onChange={(e) => setShowCustom(e.target.checked)}
-                        />
-                        Show custom controls
-                      </label>
-                      <label className="more-option">
-                        <input
-                          type="checkbox"
-                          checked={preserveAspect}
-                          onChange={(e) => setPreserveAspect(e.target.checked)}
-                        />
-                        Preserve intrinsic aspect ratio
-                        <div className="more-option-hint">
-                          When enabled the player matches each video's native
-                          aspect ratio; otherwise the player stays 16:9 and
-                          videos are letterboxed.
-                        </div>
-                      </label>
+                      {/* Removed: Show custom controls and Preserve intrinsic aspect ratio options (handled via other controls). */}
                     </div>
                   )}
                 </div>
