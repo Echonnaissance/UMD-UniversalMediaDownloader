@@ -59,6 +59,14 @@ export default function DownloadedPage() {
       return false;
     }
   });
+  const [force16, setForce16] = useState(() => {
+    try {
+      const v = localStorage.getItem("umd.force16");
+      return v === "1";
+    } catch (e) {
+      return false;
+    }
+  });
   const [navigationMode, setNavigationMode] = useState(() => {
     try {
       return localStorage.getItem("umd.navMode") || "list";
@@ -81,9 +89,11 @@ export default function DownloadedPage() {
         const videoEl =
           playerCardRef.current?.querySelector?.(".video-element");
         if (videoEl) {
-          if (preserveAspect && w && h) {
+          // Global override: if `force16` is enabled, skip preserving aspect
+          if (!force16 && preserveAspect && w && h) {
             // CSS expects aspect like "16/9"
             videoEl.style.setProperty("--video-aspect", `${w}/${h}`);
+            // debug: console.log('setting --video-aspect', `${w}/${h}`);
           } else {
             // remove any custom aspect so CSS fallback (16/9) applies
             try {
@@ -1289,6 +1299,39 @@ export default function DownloadedPage() {
                             title="Toggle theater mode"
                           >
                             {theater ? "Exit" : "Theater"}
+                          </button>
+                          <button
+                            className={`btn control force-aspect-btn ${
+                              force16 ? "active" : ""
+                            }`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              try {
+                                const next = !force16;
+                                setForce16(next);
+                                try {
+                                  localStorage.setItem(
+                                    "umd.force16",
+                                    next ? "1" : "0"
+                                  );
+                                } catch (e) {}
+                                // trigger immediate recompute by simulating metadata handler
+                                const v = videoRef.current;
+                                if (
+                                  v &&
+                                  typeof v.dispatchEvent === "function"
+                                ) {
+                                  try {
+                                    v.dispatchEvent(
+                                      new Event("loadedmetadata")
+                                    );
+                                  } catch (e) {}
+                                }
+                              } catch (e) {}
+                            }}
+                            title="Force 16:9 for all videos"
+                          >
+                            {force16 ? "16:9 (Locked)" : "Lock 16:9"}
                           </button>
                         </div>
                       </div>
