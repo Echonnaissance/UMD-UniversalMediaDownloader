@@ -340,6 +340,19 @@
   align-self: start;
 }
 
+/* If computed widths are provided, apply them (desktop only) */
+@media (min-width: 901px) {
+  .player-column {
+    width: var(--computed-player-width, auto);
+    max-width: var(--computed-player-width, none);
+    flex: none;
+  }
+  .list-column {
+    width: var(--computed-list-width, var(--list-width));
+    flex: none;
+  }
+}
+
 /* place list in right grid area */
 .list-column {
   grid-area: list;
